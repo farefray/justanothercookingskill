@@ -333,6 +333,12 @@ namespace TestMod
                    
                     if (ourFoodBase == existingFoodBase)
                     {
+                        if (food.CanEatAgain())
+                        {
+                            food.m_health = 0f; // dirty way to finish effect of base food, so our food may replace it
+                            return true;
+                        }
+
                         __instance.Message(MessageHud.MessageType.Center, Localization.instance.Localize("$msg_nomore", new string[]
                         {
                             item.m_shared.m_name
