@@ -2,24 +2,21 @@
 using UnityEngine;
 using BepInEx;
 using BepInEx.Configuration;
-using JotunnLib;
 using JotunnLib.Entities;
 using JotunnLib.Managers;
 using JotunnLib.Utils;
 using HarmonyLib;
 using System.Collections.Generic;
-using UnityEngine.SceneManagement;
 using System.Reflection;
 using System.Linq;
 
-namespace TestMod
+namespace JustAnotherCookingSkill
 {
-    [BepInPlugin("com.bepinex.plugins.farefray.justanothercookingskill", "Just Another Cooking Skill", "0.0.1")]
+    [BepInPlugin("com.bepinex.plugins.farefray.justanothercookingskill", "Just Another Cooking Skill", "0.0.3")]
     [BepInDependency("com.bepinex.plugins.jotunnlib")]
     class JustAnotherCookingSkill : BaseUnityPlugin
     {
         public const string PluginGUID = "farefray.rpgmodpack.valheim.JustAnotherCookingSkill";
-        public static string Version = "0.0.1";
         public static string ModName = "Just Another Cooking Skill";
 
         private static Harmony harmony;
@@ -27,10 +24,20 @@ namespace TestMod
         public static ConfigEntry<bool> modEnabled;
 
         private static ConfigEntry<float> cookingStaticExperienceGain;
+        private static ConfigEntry<float> cauldronStaticExperienceGain;
 
         private static Skills.SkillType COOKING_SKILL_TYPE = 0;
         private static ConfigEntry<int> foodIncreasePerQuality;
-        private static List<string> affectedFood = new List<string> { "CookedMeat", "CookedLoxMeat", "SerpentMeatCooked", "FishCooked", "NeckTailGrilled" };
+        private static List<string> affectedFood = new List<string> {
+            // cooking station
+            "CookedMeat", "CookedLoxMeat", "SerpentMeatCooked", "FishCooked", "NeckTailGrilled",
+            // cauldron
+            "QueensJam", "BloodPudding", "Bread", "FishWraps", "LoxPie", "Sausages", "CarrotSoup", "TurnipStew", "SerpentStew",
+            // Jams by RandyKnapp
+            "RaspberryJam", "HoneyRaspberryJam", "BlueberryJam", "HoneyBlueberryJam", "CloudberryJam", "HoneyCloudberryJam", "KingsJam", "NordicJam",
+            // TEST
+            "NonExistingItemToTestItsOkay"
+        };
         private static string[] qualityPrefixes = { "awful", "poorly", "" /** Thats normal food variant **/, "well", "deliciously" };
 
         private static string[] qualitiesChanceBucket = { }; // thats, most likely horrible but funny way to generate random
@@ -45,18 +52,19 @@ namespace TestMod
 
             foodIncreasePerQuality = Config.Bind<int>("Values Config", "foodIncreasePerQuality", 15, "For which amount better/worse quality food will be better/worse than previous");
             cookingStaticExperienceGain = Config.Bind<float>("Values Config", "cookingStaticExperienceGain", 1f, "Cooking skill experience gained when using the Cooking Station.");
+            cauldronStaticExperienceGain = Config.Bind<float>("Values Config", "cauldronStaticExperienceGain", 2f, "Cooking skill experience gained when using the Cauldron.");
 
             // chances to qualify variants for meals
-            int[] qualityChancesArray = { 10, 25, 30, 25, 10 }; // should match Length of qualityPrefixes
+            int[] qualityChancesArray = { 75, 40, 35, 20, 10 }; // should match Length of qualityPrefixes
             for (int qualityIndex = 0; qualityIndex < qualityChancesArray.Length; qualityIndex++)
             {
                 string[] repeatedQualities = Enumerable.Repeat(qualityPrefixes[qualityIndex], qualityChancesArray[qualityIndex]).ToArray();
                 qualitiesChanceBucket = qualitiesChanceBucket.Concat(repeatedQualities).ToArray();
             }
 
+            // maybe we should register those same as skills? cuz it gives warning on startScreen about prefabs missing
             ObjectManager.Instance.ObjectRegister += registerObjects;
             PrefabManager.Instance.PrefabRegister += registerPrefabs;
-
             registerSkills();
 
             harmony = new Harmony(PluginGUID);
@@ -73,20 +81,6 @@ namespace TestMod
             Debug.Log($"[{ModName}] {msg.ToString()}");
         }
 
-        private void OnGUI()
-        {
-            if (!modEnabled.Value)
-            {
-                return;
-            }
-
-                // Display version in main menu
-            if (SceneManager.GetActiveScene().name == "start")
-            {
-                GUI.Label(new Rect(Screen.width - 164, 20, 164, 40), "RPG Modpack by FareFray: v." + Version);
-            }
-        }
-
         // Register new prefabs
         private void registerPrefabs(object sender, EventArgs e)
         {
@@ -94,46 +88,58 @@ namespace TestMod
             {
                 for (int index = 0; index < qualityPrefixes.Length; index++)
                 {
-                    ItemDrop item;
+                    // check for base prefab existance
+                    if (ObjectDB.instance.GetItemPrefab(foodName) == null)
+                    {
+                        Log($"No prefab registered for meal: {foodName}");
+                        continue;
+                    }
+
+                    ItemDrop item = ObjectManager.Instance.GetItemDrop(foodName);
+                    if (item == null)
+                    {
+                        // when no base meal prefab exists, we just skip that part
+                        continue;
+                    }
+
                     GameObject prefab;
 
                     string qualityPrefix = qualityPrefixes[index];
-                    string qualifiedPrefabName = qualityPrefix + foodName;
-
-                    if (index == 2)
+                    bool isNormalQuality = qualityPrefix == "";
+                    if (!isNormalQuality)
                     {
                         // skipping default quality mostly, cuz those items are already exists,
                         // but modyfing to match the rest
+                        string qualifiedPrefabName = qualityPrefix + foodName;
 
-                        item = ObjectManager.Instance.GetItemDrop(foodName);
-                    } 
-                    else
-                    {
                         // create new quality items
                         prefab = PrefabManager.Instance.CreatePrefab(qualifiedPrefabName, foodName);
+                        // prefab.gameObject.name = qualifiedPrefabName;
+
                         item = prefab.GetComponent<ItemDrop>();
                         item.m_itemData.m_dropPrefab = prefab;
                     }
 
 
                     // setting quality representation for food
-                    // consider that this is 1 by default for any food. We have to play on this
                     item.m_itemData.m_quality = index;
                     item.m_itemData.m_shared.m_maxQuality = qualityPrefixes.Length;
-                    
                    
-                    if (index == 2)
+                    if (isNormalQuality)
                     {
                         // for items which already exist, we're done here
                         continue;
                     }
 
-                    string new_m_name = item.m_itemData.m_shared.m_name + "_" + qualityPrefix;
-                    LocalizationManager.Instance.RegisterTranslation(new_m_name.Substring(1), Localization.instance.Localize(item.m_itemData.m_shared.m_name));
-                    item.m_itemData.m_shared.m_name = new_m_name;
+                    string new_m_name = qualityPrefix + item.m_itemData.m_shared.m_name.Substring(1);
+                    // TODO: this should be moved into Awake
+                    LocalizationManager.Instance.RegisterTranslation(new_m_name,
+                        Localization.instance.Localize(item.m_itemData.m_shared.m_name)); // same localization name as base
 
-                    item.m_itemData.m_shared.m_description += " (" + char.ToUpper(qualityPrefix[0]) + qualityPrefix.Substring(1) + " cooked)";
+                    item.m_itemData.m_shared.m_name = "$" + new_m_name;
+                    item.m_itemData.m_shared.m_description += " (" + qualityPrefix + " cooked)";
                    
+                    // increase/decrease stats
                     float baseFoodHealth = item.m_itemData.m_shared.m_food;
                     item.m_itemData.m_shared.m_food =
                         (int)Math.Round(baseFoodHealth * ((100f + (index * foodIncreasePerQuality.Value) - 20) / 100f));
@@ -158,13 +164,14 @@ namespace TestMod
             {
                 for (int index = 0; index < qualityPrefixes.Length; index++)
                 {
-                    if (index == 2)
+                    if (index == 2 || ObjectDB.instance.GetItemPrefab(foodName) == null)
                     {
                         // skipping empty quality, cuz those items are already exists by default
                         continue;
                     }
 
                     ObjectManager.Instance.RegisterItem(qualityPrefixes[index] + foodName);
+                    Log($"Registering {qualityPrefixes[index] + foodName}");
                 }
             }
         }
@@ -184,6 +191,8 @@ namespace TestMod
             Sprite CookingSkillSprite = Sprite.Create(cookingSkillTex, new Rect(0f, 0f, cookingSkillTex.width, cookingSkillTex.height), Vector2.zero);
             string description = "Improves chance to prepare better quality food.";
             string name = "Cooking";
+
+            // skill id: 8253696
             COOKING_SKILL_TYPE = SkillManager.Instance.RegisterSkill(new SkillConfig()
             {
                 Identifier = PluginGUID,
@@ -217,14 +226,71 @@ namespace TestMod
 
         static string getRandomQualityBasedOnSkill(Humanoid user)
         {
+            // thats probably stupid way to make skill affect the result - could be optimized
             int skillLevel = (int)Math.Round(user.GetSkillFactor(COOKING_SKILL_TYPE) * 100); // 0.01 = 1 lvl, 0.99 = 99 lvl
 
-            int randomSeed = random.Next(0, qualitiesChanceBucket.Length);
+            int maximumValue = qualitiesChanceBucket.Length - 1;
+            int randomSeed = random.Next(0, maximumValue);
 
-            randomSeed += random.Next(0, skillLevel);
+            randomSeed += random.Next(0, skillLevel); // increasing randomed value by skill
 
-            return qualitiesChanceBucket[randomSeed];
+            return randomSeed >= maximumValue ? qualitiesChanceBucket[maximumValue] : qualitiesChanceBucket[randomSeed];
+        }       
+
+        // ==================================================================== //
+        //              FOOD PATCHES                                       //
+        // ==================================================================== //
+
+        #region Food eating Patches
+
+        static string getBaseFoodMName(ItemDrop.ItemData item)
+        {
+            string foodPrefix = qualityPrefixes[item.m_quality];
+            return foodPrefix != "" ? item.m_shared.m_name.Replace(foodPrefix, "") : item.m_shared.m_name; // contains base food name of item we are trying to eat. F.e. CookedMeat if we are trying to eat wellCookedMeat
         }
+
+        // Do not let eat multiple food qualities
+        [HarmonyPatch(typeof(Player), "CanEat")]
+        internal class Patch_Player_CanEat
+        {   
+            static bool Prefix(ref bool __result, ref Player __instance, ref List<Player.Food> ___m_foods, ref ItemDrop.ItemData item, bool showMessages)
+            {
+                bool isOurFoodUsed = item.m_shared.m_maxQuality == qualityPrefixes.Length; // quite tricky way to figure out if food droploots were edited by our mod. Could be improved.
+
+                if (!isOurFoodUsed) {
+                    return true;
+                }
+
+                string ourFoodBase = getBaseFoodMName(item);
+
+                // checking if we have already active food of same base (dont let eat Well Cooked Meat when Poorly Cooked Meat still active)
+                foreach (Player.Food food in ___m_foods)
+                {
+                    string existingFoodBase = getBaseFoodMName(food.m_item);
+
+                    if (ourFoodBase == existingFoodBase)
+                    {
+                        if (food.CanEatAgain())
+                        {
+                            food.m_health = 0f; // dirty way to finish effect of base food, so our food may replace it
+                            return true;
+                        }
+
+                        __instance.Message(MessageHud.MessageType.Center, Localization.instance.Localize("$msg_nomore", new string[]
+                        {
+                            item.m_shared.m_name
+                        }), 0, null);
+
+                        __result = false;
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+        }
+
+        #endregion
 
         // ==================================================================== //
         //              COOKING STATION PATCHES                                 //
@@ -278,6 +344,7 @@ namespace TestMod
 
                         // instead of processing normal food, we spawn qualified variant
                         ReflectionUtils.InvokePrivate(__instance, "SpawnItem", new object[] { qualifyMealName });
+                     
 
                         zdo.Set("slot" + slot, "");
 
@@ -296,57 +363,83 @@ namespace TestMod
             }
         }
 
-
         #endregion
 
         // ==================================================================== //
-        //              FOOD PATCHES                                       //
+        //              CAULDRON PATCHES                                        //
         // ==================================================================== //
 
-        #region Food eating Patches
+        #region Cauldron Patches
 
-        static string getBaseFoorMName(ItemDrop.ItemData item)
+        // increase cooking skill when making food in the cauldron
+        [HarmonyPatch(typeof(InventoryGui), "DoCrafting")]
+        public static class InventoryGui_DoCrafting_Patch
         {
-            string foodPrefix = qualityPrefixes[item.m_quality];
-
-            return foodPrefix != "" ? item.m_shared.m_name.Replace("_" + foodPrefix, "") : item.m_shared.m_name; // contains base food name of item we are trying to eat. F.e. CookedMeat if we are trying to eat wellCookedMeat
-        }
-
-        // Do not let eat multiple food qualities
-        [HarmonyPatch(typeof(Player), "CanEat")]
-        internal class Patch_Player_CanEat
-        {   
-            static bool Prefix(ref bool __result, ref Player __instance, ref List<Player.Food> ___m_foods, ref ItemDrop.ItemData item, bool showMessages)
+            public static bool Prefix(InventoryGui __instance, 
+                ref Recipe ___m_craftRecipe, 
+                ref ItemDrop.ItemData ___m_craftUpgradeItem, 
+                Player player)
             {
-                bool isOurFoodUsed = item.m_shared.m_maxQuality == qualityPrefixes.Length; // quite tricky way to figure out if food droploots were edited by our mod. Could be improved.
-
-                if (!isOurFoodUsed) {
+                if (___m_craftRecipe == null)
+                {
                     return true;
                 }
 
-                string ourFoodBase = getBaseFoorMName(item);
+                bool isCauldronRecipe = ___m_craftRecipe.m_craftingStation?.m_name == "$piece_cauldron";
+                bool haveRequirements = player.HaveRequirements(___m_craftRecipe, false, 1) || player.NoCostCheat();
 
-                // checking if we have already active food of same base (dont let eat Well Cooked Meat when Poorly Cooked Meat still active)
-                foreach (Player.Food food in ___m_foods)
+                if (!isCauldronRecipe || 
+                    !haveRequirements || 
+                    ___m_craftUpgradeItem != null)
                 {
-                    string existingFoodBase = getBaseFoorMName(food.m_item);
-                   
-                    if (ourFoodBase == existingFoodBase)
+                    // thats not our case
+                    return true;
+                }
+
+                if (!player.GetInventory().HaveEmptySlot())
+                {
+                    return false; // weird way, but as temp solution
+                }
+
+                // isCauldronRecipe + food which has m_maxQuality is our way to figure out that this food is affected by our module
+                if (___m_craftRecipe.m_item.m_itemData.m_shared.m_maxQuality == qualityPrefixes.Length)
+                {
+                    raiseCookingSkill(player, cauldronStaticExperienceGain.Value);
+
+                    string itemName = ___m_craftRecipe.m_item.gameObject.name;
+                    string qualityPrefix = getRandomQualityBasedOnSkill(player);
+
+                    // check if such object exist
+                    string qualityMealName = qualityPrefix + itemName;
+                    GameObject itemPrefab = ObjectDB.instance.GetItemPrefab(qualityMealName);
+                    if (itemPrefab == null)
                     {
-                        if (food.CanEatAgain())
+                        Log($"No prefab registered for qualify meal: {qualityMealName}");
+                        return true;
+                    }
+
+                    ItemDrop qualityItemDrop = ObjectManager.Instance.GetItemDrop(qualityMealName);
+
+                    if (player.GetInventory().AddItem(qualityMealName, ___m_craftRecipe.m_amount, qualityItemDrop.m_itemData.m_quality, 0, player.GetPlayerID(), player.GetPlayerName()) != null)
+                    {
+                        if (!player.NoCostCheat())
                         {
-                            food.m_health = 0f; // dirty way to finish effect of base food, so our food may replace it
-                            return true;
+                            player.ConsumeResources(___m_craftRecipe.m_resources, 1);
                         }
 
-                        __instance.Message(MessageHud.MessageType.Center, Localization.instance.Localize("$msg_nomore", new string[]
-                        {
-                            item.m_shared.m_name
-                        }), 0, null);
-
-                        __result = false;
-                        return false;
+                        ReflectionUtils.InvokePrivate(__instance, "UpdateCraftingPanel", new object[] { false });
                     }
+
+                    CraftingStation currentCraftingStation = Player.m_localPlayer.GetCurrentCraftingStation();
+                    if (currentCraftingStation)
+                    {
+                        currentCraftingStation.m_craftItemDoneEffects.Create(player.transform.position, Quaternion.identity, null, 1f);
+                    }
+
+                    Game.instance.GetPlayerProfile().m_playerStats.m_crafts++;
+                    Gogan.LogEvent("Game", "Crafted", itemName, (long)1);
+
+                    return false; // we have already crafted our recipe, skip origin method
                 }
 
                 return true;
