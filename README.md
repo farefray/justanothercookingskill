@@ -18,3 +18,6 @@ Thanks to
 https://github.com/jotunnlib/jotunnlib - modding library used
 https://github.com/thegreyham/Valheim.CookingSkill - original idea from thegreyham, also I've used some harmony patches from his repository 
 
+
+![image](https://user-images.githubusercontent.com/30721331/113504060-5d413e80-953e-11eb-9135-c22fecf920ea.png)
+![image](https://user-images.githubusercontent.com/30721331/113504079-6d591e00-953e-11eb-84e5-f58061edab62.png)
